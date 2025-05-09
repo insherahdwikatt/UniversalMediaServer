@@ -15,7 +15,9 @@
  * Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 package net.pms;
-
+import javax.swing.JOptionPane;
+import java.awt.Desktop;
+import java.nio.file.*;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
 import com.sun.jna.Platform;
@@ -53,6 +55,7 @@ import net.pms.configuration.Build;
 import net.pms.configuration.GuiConfiguration;
 import net.pms.configuration.PostUpgrade;
 import net.pms.configuration.RendererConfigurations;
+import net.pms.configuration.RendererDeviceConfiguration;
 import net.pms.configuration.UmsConfiguration;
 import net.pms.database.MediaDatabase;
 import net.pms.database.UserDatabase;
@@ -829,6 +832,55 @@ public class PMS {
 			denyHeadless = true;
 		}
 
+		//Check if running from disk image (macOS only)
+		if (Platform.isMac()) {
+			try {
+				// Get the full path to the running JAR or .app bundle
+				String codePath = PMS.class
+					.getProtectionDomain()
+					.getCodeSource()
+					.getLocation()
+					.toURI()
+					.getPath();
+		
+				// If it starts with /Volumes, we’re running from a DMG
+				if (codePath.startsWith("/Volumes/")) {
+					// Find the end of the .app bundle name
+					int idx = codePath.indexOf(".app/");
+					if (idx != -1) {
+						String appBundle = codePath.substring(0, idx + ".app".length());
+		
+						// Ask the user if they want to move it to /Applications
+						int choice = JOptionPane.showConfirmDialog(
+							null,
+							"It looks like you’re running UMS from a disk image (DMG).\n" +
+							"Would you like to move the application to /Applications/?",
+							"Move to Applications",
+							JOptionPane.YES_NO_OPTION,
+							JOptionPane.QUESTION_MESSAGE
+						);
+		
+						if (choice == JOptionPane.YES_OPTION) {
+							Path source = Paths.get(appBundle);
+							Path target = Paths.get("/Applications", source.getFileName().toString());
+		
+							// Copy the entire .app bundle recursively
+							copyRecursively(source, target);
+		
+							// Launch the newly copied app
+							Desktop.getDesktop().open(target.toFile());
+							// Quit the current instance
+							System.exit(0);
+						}
+					}
+				}
+			} catch (Exception e) {
+				LOGGER.warn("Could not detect execution location: {}", e.getMessage());
+			}
+		}
+		
+
+
 		if (args.length > 0) {
 			Pattern pattern = Pattern.compile(PROFILE);
 			for (String arg : args) {
@@ -993,6 +1045,26 @@ public class PMS {
 
 		return instance;
 	}
+	
+	/**
+ * Recursively copies a source directory (or file) to a target location.
+ */
+private static void copyRecursively(Path src, Path dst) throws IOException {
+    if (Files.notExists(dst)) {
+        Files.createDirectories(dst);
+    }
+    try (DirectoryStream<Path> stream = Files.newDirectoryStream(src)) {
+        for (Path entry : stream) {
+            Path target = dst.resolve(entry.getFileName());
+            if (Files.isDirectory(entry)) {
+                copyRecursively(entry, target);
+            } else {
+                Files.copy(entry, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+    }
+}
+
 
 	@Nonnull
 	public static PMS getNewInstance() {
